@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta charset="UTF-8">
+    <title>Sonsuz Uzay - Zoom Verisi</title>
+    <style>
+        body { margin: 0; overflow: hidden; background-color: #000; }
+        #hud {
+            position: absolute; top: 20px; left: 20px; 
+            color: #00ff00; font-family: 'Courier New', monospace; 
+            pointer-events: none; background: rgba(0, 20, 0, 0.7); 
+            padding: 15px; border: 1px solid #00ff00;
+            box-shadow: 0 0 10px rgba(0, 255, 0, 0.3);
+            line-height: 1.6; font-size: 13px; min-width: 180px;
+        }
+        .label { color: #88ff88; font-weight: bold; }
+        .bar-container { width: 100%; background: #003300; height: 5px; margin-top: 5px; }
+        #zoomBar { width: 0%; background: #00ff00; height: 100%; transition: width 0.1s; }
+    </style>
+</head>
+<body>
+    <div id="hud">
+        <div style="text-align: center; border-bottom: 1px solid #00ff00; margin-bottom: 10px; padding-bottom: 5px;">NAVİGASYON VERİSİ</div>
+        <span class="label">KOORDİNAT:</span><br>
+        X: <span id="posX">0</span><br>
+        Y: <span id="posY">0</span><br>
+        Z: <span id="posZ">0</span><br>
+        <hr style="border:0; border-top:1px solid #004400; margin: 10px 0;">
+        <span class="label">OPTİK ZOOM:</span> <span id="zoomVal">1.0</span>x<br>
+        <div class="bar-container"><div id="zoomBar"></div></div>
+        <span class="label">FOV:</span> <span id="fovVal">75</span>°<br>
+        <span class="label">HIZ:</span> <span id="speedVal">0</span> u/s
+    </div>
+
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.min.js"></script>
+
+<script>
+    const scene = new THREE.Scene();
+    const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 1, 60000);
+    const renderer = new THREE.WebGLRenderer({ antialias: false });
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    document.body.appendChild(renderer.domElement);
+
+    let globalPos = { x: 0, y: 0, z: 0 };
+
+    // TEMİZ YILDIZ DOKUSU
+    function createStarTexture() {
+        const canvas = document.createElement('canvas');
+        canvas.width = 64; canvas.height = 64;
+        const ctx = canvas.getContext('2d');
+        const grad = ctx.createRadialGradient(32, 32, 0, 32, 32, 32);
+        grad.addColorStop(0, 'white');
+        grad.addColorStop(0.2, 'rgba(255, 255, 255, 0.8)');
+        grad.addColorStop(1, 'rgba(0, 0, 0, 0)');
+        ctx.fillStyle = grad;
+        ctx.fillRect(0, 0, 64, 64);
+        return new THREE.CanvasTexture(canvas);
+    }
+
+    const STAR_COUNT = 100000;
+    const AREA_SIZE = 25000;
+    const geo = new THREE.BufferGeometry();
+    const pos = new Float32Array(STAR_COUNT * 3);
+    for (let i = 0; i < STAR_COUNT; i++) {
+        pos[i*3] = (Math.random() - 0.5) * AREA_SIZE;
+        pos[i*3+1] = (Math.random() - 0.5) * AREA_SIZE;
+        pos[i*3+2] = (Math.random() - 0.5) * AREA_SIZE;
+    }
+    geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+    const mat = new THREE.PointsMaterial({ size: 12, map: createStarTexture(), transparent: true, blending: THREE.AdditiveBlending, depthWrite: false });
+    const stars = new THREE.Points(geo, mat);
+    scene.add(stars);
+
+    // KONTROLLER
+    let keys = {};
+    let targetPitch = 0, targetYaw = 0, currentPitch = 0, currentYaw = 0;
+    let targetFOV = 75;
+
+    window.addEventListener('keydown', (e) => keys[e.code] = true);
+    window.addEventListener('keyup', (e) => keys[e.code] = false);
+    window.addEventListener('wheel', (e) => {
+        targetFOV = Math.max(10, Math.min(120, targetFOV + e.deltaY * 0.1));
+    });
+    document.addEventListener('mousemove', (e) => {
+        if (document.pointerLockElement === document.body) {
+            targetYaw -= e.movementX * 0.0015;
+            targetPitch -= e.movementY * 0.0015;
+            targetPitch = Math.max(-Math.PI/2, Math.min(Math.PI/2, targetPitch));
+        }
+    });
+    document.body.addEventListener('click', () => document.body.requestPointerLock());
+
+    const uiX = document.getElementById('posX'), uiY = document.getElementById('posY'), uiZ = document.getElementById('posZ');
+    const uiZoom = document.getElementById('zoomVal'), uiZoomBar = document.getElementById('zoomBar'), uiFov = document.getElementById('fovVal'), uiSpeed = document.getElementById('speedVal');
+
+    function animate() {
+        requestAnimationFrame(animate);
+
+        currentYaw += (targetYaw - currentYaw) * 0.08;
+        currentPitch += (targetPitch - currentPitch) * 0.08;
+        camera.rotation.set(currentPitch, currentYaw, 0, 'YXZ');
+
+        camera.fov += (targetFOV - camera.fov) * 0.08;
+        camera.updateProjectionMatrix();
+
+        // ZOOM HESAPLAMA: 75 varsayılan olduğu için ona göre oranlıyoruz
+        let zoomFactor = 75 / camera.fov;
+        let zoomPercent = ((camera.fov - 120) / (10 - 120)) * 100;
+
+        let speed = keys['ShiftLeft'] ? 100 : 30;
+        const moveVec = new THREE.Vector3();
+        if (keys['KeyW']) moveVec.z += speed;
+        if (keys['KeyS']) moveVec.z -= speed;
+        if (keys['KeyA']) moveVec.x += speed;
+        if (keys['KeyD']) moveVec.x -= speed;
+
+        if (moveVec.length() > 0) {
+            moveVec.applyQuaternion(camera.quaternion);
+            globalPos.x -= moveVec.x; globalPos.y -= moveVec.y; globalPos.z -= moveVec.z;
+            const p = geo.attributes.position.array;
+            for (let i = 0; i < p.length; i += 3) {
+                p[i] += moveVec.x; p[i+1] += moveVec.y; p[i+2] += moveVec.z;
+                if (p[i] > AREA_SIZE/2) p[i] -= AREA_SIZE; if (p[i] < -AREA_SIZE/2) p[i] += AREA_SIZE;
+                if (p[i+1] > AREA_SIZE/2) p[i+1] -= AREA_SIZE; if (p[i+1] < -AREA_SIZE/2) p[i+1] += AREA_SIZE;
+                if (p[i+2] > AREA_SIZE/2) p[i+2] -= AREA_SIZE; if (p[i+2] < -AREA_SIZE/2) p[i+2] += AREA_SIZE;
+            }
+            geo.attributes.position.needsUpdate = true;
+        }
+
+        // HUD GÜNCELLEME
+        uiX.innerText = Math.round(globalPos.x);
+        uiY.innerText = Math.round(globalPos.y);
+        uiZ.innerText = Math.round(globalPos.z);
+        uiFov.innerText = Math.round(camera.fov);
+        uiZoom.innerText = zoomFactor.toFixed(1);
+        uiZoomBar.style.width = Math.max(0, Math.min(100, zoomPercent)) + "%";
+        uiSpeed.innerText = moveVec.length() > 0 ? speed : 0;
+
+        renderer.render(scene, camera);
+    }
+    animate();
+
+    window.addEventListener('resize', () => {
+        camera.aspect = window.innerWidth / window.innerHeight;
+        camera.updateProjectionMatrix();
+        renderer.setSize(window.innerWidth, window.innerHeight);
+    });
+</script>
+</body>
+</html>
